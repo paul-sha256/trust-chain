@@ -191,3 +191,96 @@
     (ok true)
   )
 )
+
+;; PROTOCOL INITIALIZATION
+
+;; Initialize default reputation actions
+(define-public (initialize-reputation-actions)
+  (begin
+    (asserts! (is-eq tx-sender (var-get contract-owner)) (err ERR-NOT-ADMIN))
+    ;; Governance participation
+    (map-set reputation-actions { action-type: "governance-vote" } {
+      multiplier: u5,
+      description: "Participation in governance voting",
+      active: true,
+    })
+    ;; Smart contract fulfillment
+    (map-set reputation-actions { action-type: "contract-fulfillment" } {
+      multiplier: u10,
+      description: "Successful completion of a smart contract agreement",
+      active: true,
+    })
+    ;; Community contribution
+    (map-set reputation-actions { action-type: "community-contribution" } {
+      multiplier: u7,
+      description: "Contribution to community projects or initiatives",
+      active: true,
+    })
+    ;; Network validation
+    (map-set reputation-actions { action-type: "validation" } {
+      multiplier: u3,
+      description: "Validation of network transactions or data",
+      active: true,
+    })
+    ;; Content creation
+    (map-set reputation-actions { action-type: "content-creation" } {
+      multiplier: u6,
+      description: "Creation of valuable content on the platform",
+      active: true,
+    })
+    (ok true)
+  )
+)
+
+;; UTILITY FUNCTIONS
+
+;; Validate owner authorization
+(define-private (is-valid-owner (owner principal))
+  (and
+    (is-some (map-get? identities { owner: owner }))
+    (is-eq owner tx-sender)
+  )
+)
+
+;; Log reputation changes to history
+(define-private (log-reputation-change
+    (owner principal)
+    (action-type (string-ascii 50))
+    (previous-score uint)
+    (new-score uint)
+  )
+  (map-set reputation-history {
+    owner: owner,
+    tx-id: stacks-block-height,
+  } {
+    action-type: action-type,
+    previous-score: previous-score,
+    new-score: new-score,
+    timestamp: burn-block-height,
+    block-height: stacks-block-height,
+  })
+)
+
+;; Get action multiplier value
+(define-private (get-action-multiplier (action-type (string-ascii 50)))
+  (default-to u0
+    (get multiplier (map-get? reputation-actions { action-type: action-type }))
+  )
+)
+
+;; Check if action is active
+(define-private (is-action-active (action-type (string-ascii 50)))
+  (default-to false
+    (get active (map-get? reputation-actions { action-type: action-type }))
+  )
+)
+
+;; Get identity data
+(define-private (get-identity-field (owner principal))
+  (map-get? identities { owner: owner })
+)
+
+;; Check if reputation should decay
+(define-private (should-decay (last-decay uint))
+  (>= (- stacks-block-height last-decay) (var-get decay-period))
+)
