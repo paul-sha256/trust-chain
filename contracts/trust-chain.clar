@@ -284,3 +284,115 @@
 (define-private (should-decay (last-decay uint))
   (>= (- stacks-block-height last-decay) (var-get decay-period))
 )
+
+;; IDENTITY MANAGEMENT
+
+;; Create new identity
+(define-public (create-identity (did (string-ascii 50)))
+  (let (
+      (sender tx-sender)
+      (current-block-height stacks-block-height)
+    )
+    (begin
+      ;; Validate contract state
+      (asserts! (var-get contract-active) (err ERR-NOT-ACTIVE))
+      ;; Check identity uniqueness
+      (asserts! (is-none (map-get? identities { owner: sender }))
+        (err ERR-IDENTITY-EXISTS)
+      )
+      ;; Validate DID format
+      (asserts! (> (len did) MINIMUM_DID_LENGTH) (err ERR-INVALID-PARAMETERS))
+      ;; Create new identity
+      (map-set identities { owner: sender } {
+        did: did,
+        reputation-score: (var-get starting-reputation),
+        created-at: current-block-height,
+        last-updated: current-block-height,
+        last-decay: current-block-height,
+        total-actions: u0,
+        active: true,
+      })
+      (ok did)
+    )
+  )
+)
+
+;; Update identity status
+(define-public (update-identity-status (active bool))
+  (let (
+      (sender tx-sender)
+      (current-identity (unwrap! (map-get? identities { owner: sender })
+        (err ERR-IDENTITY-NOT-FOUND)
+      ))
+    )
+    (begin
+      (map-set identities { owner: sender }
+        (merge current-identity {
+          active: active,
+          last-updated: stacks-block-height,
+        })
+      )
+      (ok true)
+    )
+  )
+)
+
+;; REPUTATION SCORING ENGINE
+
+;; Update reputation score based on action
+(define-public (update-reputation-score (action-type (string-ascii 50)))
+  (let (
+      (owner tx-sender)
+      (current-identity (unwrap! (map-get? identities { owner: owner })
+        (err ERR-IDENTITY-NOT-FOUND)
+      ))
+      (current-score (get reputation-score current-identity))
+      (action-multiplier (get-action-multiplier action-type))
+      (total-actions (+ (get total-actions current-identity) u1))
+    )
+    (begin
+      ;; Validate contract state
+      (asserts! (var-get contract-active) (err ERR-NOT-ACTIVE))
+      ;; Validate identity state
+      (asserts! (get active current-identity) (err ERR-UNAUTHORIZED))
+      ;; Validate action type
+      (asserts!
+        (is-some (map-get? reputation-actions { action-type: action-type }))
+        (err ERR-INVALID-PARAMETERS)
+      )
+      (asserts! (is-action-active action-type) (err ERR-INVALID-PARAMETERS))
+      ;; Apply decay if needed
+      (if (should-decay (get last-decay current-identity))
+        (decay-reputation-internal owner)
+        true
+      )
+      ;; Calculate new score
+      (let (
+          (updated-identity (unwrap! (map-get? identities { owner: owner })
+            (err ERR-IDENTITY-NOT-FOUND)
+          ))
+          (updated-current-score (get reputation-score updated-identity))
+          (new-score (if (< (+ updated-current-score action-multiplier) MAX-REPUTATION-SCORE)
+            (+ updated-current-score action-multiplier)
+            MAX-REPUTATION-SCORE
+          ))
+        )
+        (begin
+          ;; Update identity record
+          (map-set identities { owner: owner }
+            (merge updated-identity {
+              reputation-score: new-score,
+              last-updated: stacks-block-height,
+              total-actions: total-actions,
+            })
+          )
+          ;; Log reputation change
+          (log-reputation-change owner action-type updated-current-score
+            new-score
+          )
+          (ok new-score)
+        )
+      )
+    )
+  )
+)
